@@ -1,0 +1,63 @@
+name: ZAP Authenticated Scan
+
+on: push
+
+jobs:
+  auth:
+    name: Playwright Login
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload auth state
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-auth-session
+          path: zap-auth-playwright/auth-state.json
+
+  zap:
+    name: ZAP Full Scan
+    runs-on: ubuntu-latest
+    needs: auth
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download auth session
+        uses: actions/download-artifact@v4
+        with:
+          name: zap-auth-session
+          path: zap/session
+
+      - name: Import session script
+        run: |
+          echo "=== Auth State JSON - Checking ==="
+          cat zap/session/auth-state.json
+          echo "=== Auth State JSON - Done ==="
+          jq -r '                                                             
+            .cookies
+            | map("\(.name)=\(.value)")
+            | join("; ")
+          ' zap/session/auth-state.json > cookie.txt
+
+      - name: Check imported cookies
+        run: |
+          curl -s -o /dev/null -w "%{http_code}\n" -H "Cookie: $(cat cookie.txt)" https://dashboard.clerk.com
+
+      - name: Extract cookies for ZAP
+        id: get_cookies
+        run: |
+          # Use the cookie.txt produced earlier (by jq) and export it as a step output
+          # This avoids path issues and the deprecated ::set-output workflow command.
+          echo "cookie=$(cat cookie.txt)" >> $GITHUB_OUTPUT
+
+      - name: Run ZAP
+        uses: zaproxy/action-full-scan@v0.13.0
+        with:
+          target: https://dashboard.clerk.com
+          fail_action: true
+          cmd_options: >
+            -d \
+            -z "-config cookie=${{ steps.get_cookies.outputs.cookie }}" \
+            -r zap-report.html
